@@ -1,4 +1,5 @@
 import discord
+from discord import app_commands
 from discord.ext import commands, tasks
 import os
 import imagehash
@@ -13,29 +14,33 @@ from keep_alive import keep_alive
 load_dotenv()
 TOKEN = os.getenv('ANTISPAM_TOKEN')
 
-# ฐานข้อมูลลายนิ้วมือภาพ (เก็บสูงสุด 2,000 รูป เพื่อความเสถียรระยะยาว)
-# โครงสร้าง: deque([{'hashes': (phash, dhash, whash), 'author': id}, ...])
+# ระบบสถานะการทำงาน
+PROTECTION_ENABLED = True
+
+# ฐานข้อมูลลายนิ้วมือภาพ (Wave Cache)
 image_vault = deque(maxlen=2000)
 
-# คำต้องห้าม (สแกนแบบ Case-Insensitive)
-FORBIDDEN_PHRASES = [
-    "bregamb.cc", "promo code", "reward received", "free $", 
-    "beast games", "nitro", "t.me/", "bit.ly/"
-]
+FORBIDDEN_PHRASES = ["bregamb.cc", "promo code", "free $", "beast games", "t.me/", "bit.ly/"]
 
-# ตั้งค่าพื้นฐาน
 intents = discord.Intents.default()
 intents.message_content = True 
 intents.members = True
 
-bot = commands.Bot(command_prefix="rb!", intents=intents, help_command=None)
+class RETHBot(commands.Bot):
+    def __init__(self):
+        super().__init__(command_prefix="!", intents=intents, help_command=None)
+        
+    async def setup_hook(self):
+        # Sync Slash Commands ไปยัง Discord
+        await self.tree.sync()
+        print("✅ [SYNC] Slash Commands Synced!")
 
-# --- CORE LOGIC ---
+bot = RETHBot()
+
+# --- UTILITY FUNCTIONS ---
 
 def compute_multi_hash(img_bin):
-    """คำนวณ Hash 3 ชนิดซ้อนกันเพื่อความแม่นยำสูงสุด"""
     with Image.open(BytesIO(img_bin)) as img:
-        # แปลงเป็น RGB เพื่อรองรับทุกฟอร์แมต (รวมถึง RGBA/WebP)
         img = img.convert('RGB')
         return {
             'p': imagehash.phash(img),
@@ -44,105 +49,84 @@ def compute_multi_hash(img_bin):
         }
 
 def is_spam(new_hashes, threshold=12):
-    """
-    เปรียบเทียบความต่างของภาพแบบคะแนนสะสม
-    Threshold 12 คือ 'เข้มงวดมาก' (99% Similarity)
-    """
     for entry in image_vault:
         saved = entry['hashes']
-        # คำนวณความต่างสะสมจาก 3 มิติ
         diff = (new_hashes['p'] - saved['p']) + \
                (new_hashes['d'] - saved['d']) + \
                (new_hashes['w'] - saved['w'])
-        
         if diff <= threshold:
             return True
     return False
+
+# --- SLASH COMMANDS ---
+
+@bot.tree.command(name="on", description="เปิดระบบป้องกัน RETH Guard")
+@app_commands.checks.has_permissions(administrator=True)
+async def system_on(interaction: discord.Interaction):
+    global PROTECTION_ENABLED
+    PROTECTION_ENABLED = True
+    await bot.change_presence(status=discord.Status.online)
+    await interaction.response.send_message("🟢 **RETH Guard:** ระบบป้องกันเปิดใช้งานแล้ว! (Elite Mode)", ephemeral=False)
+
+@bot.tree.command(name="off", description="ปิดระบบป้องกัน RETH Guard")
+@app_commands.checks.has_permissions(administrator=True)
+async def system_off(interaction: discord.Interaction):
+    global PROTECTION_ENABLED
+    PROTECTION_ENABLED = False
+    await bot.change_presence(status=discord.Status.do_not_disturb)
+    await interaction.response.send_message("🔴 **RETH Guard:** ระบบป้องกันถูกปิดใช้งานชั่วคราว", ephemeral=False)
+
+@bot.tree.command(name="clear", description="Wave Clear: ล้างฐานข้อมูลรูปซ้ำทั้งหมด")
+@app_commands.checks.has_permissions(administrator=True)
+async def clear_wave(interaction: discord.Interaction):
+    count = len(image_vault)
+    image_vault.clear()
+    await interaction.response.send_message(f"🌊 **Wave Clear!** ล้างข้อมูลลายนิ้วมือภาพสำเร็จ {count} รายการ", ephemeral=False)
 
 # --- EVENTS ---
 
 @bot.event
 async def on_ready():
-    # ระบบเฝ้าระวังอัตโนมัติ
-    if not status_rotator.is_running():
-        status_rotator.start()
-        
-    print(f"--- RETH Guard Alpha v2.0 ---")
-    print(f"Logged in as: {bot.user.name}")
-    print(f"Precision Mode: Multi-Hash (99.9%)")
-    print(f"Memory Cache: {len(image_vault)}/2000")
+    print(f"--- RETH Guard Alpha v3.0 ---")
+    print(f"Status: {'ONLINE' if PROTECTION_ENABLED else 'OFFLINE'}")
+    print(f"Slash Commands: Ready")
     print(f"-----------------------------")
-
-@tasks.loop(minutes=5)
-async def status_rotator():
-    """เปลี่ยน Status เพื่อป้องกันบอทถูกมองว่า Idle"""
-    await bot.change_presence(
-        status=discord.Status.do_not_disturb,
-        activity=discord.Activity(
-            type=discord.ActivityType.competing, 
-            name=f"Monitoring {len(bot.guilds)} Servers"
-        )
-    )
 
 @bot.event
 async def on_message(message):
-    # ข้ามข้อความจากบอทและตัวเอง
     if message.author.bot or not message.guild:
         return
 
-    # 1. ตรวจสอบรูปภาพสแปม (Visual Recognition)
+    # ถ้าปิดระบบอยู่ ไม่ต้องทำอะไรเลย
+    if not PROTECTION_ENABLED:
+        return
+
+    # 1. ตรวจสอบรูปภาพสแปม
     if message.attachments:
         for attachment in message.attachments:
-            # รองรับไฟล์ภาพทุกประเภท
             if any(attachment.filename.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.webp', '.jfif']):
                 try:
-                    # อ่านข้อมูลไบนารีของภาพ
                     img_bytes = await attachment.read()
                     current_hashes = compute_multi_hash(img_bytes)
 
                     if is_spam(current_hashes):
                         await message.delete()
-                        log_msg = await message.channel.send(
-                            f"🛡️ **RETH Guard:** สกัดกั้นสแปมภาพจาก {message.author.mention} เรียบร้อยแล้ว",
-                            delete_after=5
-                        )
-                        print(f"[SHIELD] Deleted visual spam from {message.author.id}")
+                        await message.channel.send(f"🛡️ **RETH Guard:** พบรูปภาพซ้ำ/สแปม ดีดทิ้งเรียบร้อย!", delete_after=3)
                         return
                     
-                    # ถ้าไม่ใช่สแปม ให้บันทึกลงหน่วยความจำ
                     image_vault.append({'hashes': current_hashes, 'user': message.author.id})
-
                 except Exception as e:
-                    print(f"[ERROR] Image Processing: {e}")
+                    print(f"[ERROR] {e}")
 
-    # 2. ตรวจสอบข้อความ (Keyword Filtering)
+    # 2. ตรวจสอบข้อความ
     msg_clean = message.content.lower()
     if any(phrase in msg_clean for phrase in FORBIDDEN_PHRASES):
-        try:
-            await message.delete()
-            print(f"[SHIELD] Deleted keyword spam from {message.author.id}")
-            return
-        except:
-            pass
+        try: await message.delete()
+        except: pass
 
     await bot.process_commands(message)
 
-# --- UTILITY COMMANDS ---
-
-@bot.command()
-@commands.has_permissions(administrator=True)
-async def clear_cache(ctx):
-    """ล้างฐานข้อมูลสแปมชั่วคราว"""
-    image_vault.clear()
-    await ctx.send("🧹 ฐานข้อมูล Cache ถูกล้างเรียบร้อยแล้ว", delete_after=3)
-
-# --- RUNTIME ---
-
+# --- RUN ---
 keep_alive()
-
-try:
+if TOKEN:
     bot.run(TOKEN)
-except discord.errors.LoginFailure:
-    print("❌ Token ไม่ถูกต้อง!")
-except Exception as e:
-    print(f"❌ บอทหยุดทำงานกะทันหัน: {e}")
