@@ -1,16 +1,17 @@
 from flask import Flask
 from threading import Thread
-import os # เพิ่มอันนี้เข้ามา
+import os
 
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "RETH Guard is awake and monitoring!"
+    # ข้อความอะไรก็ได้ให้ Render รู้ว่าเว็บทำงาน
+    return "RETH Guard: Monitoring Active"
 
 def run():
-    # เปลี่ยนจาก 8080 เป็นการดึงค่าจาก Environment Variable ของ Render
-    port = int(os.environ.get("PORT", 8080)) 
+    # ดึง Port จาก Render (ปกติคือ 10000) ถ้าไม่มีให้ใช้ 8080
+    port = int(os.environ.get("PORT", 10000)) 
     app.run(host='0.0.0.0', port=port)
 
 def keep_alive():
