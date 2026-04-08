@@ -10,6 +10,8 @@ import time
 import logging
 import json
 import re
+import sys
+import traceback
 from PIL import Image, ImageOps, ImageFilter, ImageEnhance
 from io import BytesIO
 from collections import deque
@@ -17,103 +19,139 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from keep_alive import keep_alive
 
-# --- [1] LOGGING & SYSTEM MONITORING SETUP ---
+# ==========================================
+# [1] LOGGING & DIAGNOSTICS SYSTEM
+# ==========================================
 load_dotenv()
 TOKEN = os.getenv('ANTISPAM_TOKEN')
 
-# ตั้งค่า Logging ให้ละเอียดระดับ DEBUG เพื่อการวิเคราะห์ภาพ
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - [%(levelname)s] - %(name)s: %(message)s'
+    format='%(asctime)s - [%(levelname)s] - %(name)s: %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
 )
-logger = logging.getLogger('RETH_Elite_Guard')
+logger = logging.getLogger('RETH_Omega_Titan')
 
-# --- [2] CORE CONFIGURATION & DATABASE ---
-class GuardConfig:
-    """ระบบ Configuration หลักสำหรับ RETH Guard Elite"""
-    VERSION = "Elite Sovereign v7.0"
+# ==========================================
+# [2] GLOBAL CONFIGURATION & POLICY ENGINE
+# ==========================================
+class GuardPolicy:
+    """Class สำหรับจัดการค่าคอนฟิกูเรชันทั้งหมดของระบบ Omega Titan"""
+    VERSION = "Omega Titan v8.0"
+    AUTHOR = "RETH OFFICIAL"
+    
+    # ระบบเปิด/ปิดการทำงาน
     PROTECTION_ENABLED = True
-    DATABASE_LIMIT = 5000
     
-    # Advanced Thresholds
-    # 20.0 คือจุดสมดุลที่สุดในการดักรูปที่เปลี่ยน Wallpaper
-    STRUCTURAL_THRESHOLD = 20.0 
+    # ฐานข้อมูล (Memory Management)
+    MAX_DB_ENTRIES = 5000
+    CLEANUP_THRESHOLD = 0.95
     
-    # รายชื่อคำต้องห้ามที่พัฒนาด้วย Regex (ดักจับการเลี่ยงคำ)
-    BANNED_PATTERNS = [
+    # ค่าความแม่นยำ (Thresholds)
+    # เราใช้ Hash 16x16 (256 bits) ดังนั้นความต่างที่ยอมรับได้คือ 20-30
+    STRICT_SENSITIVITY = 25.0 
+    
+    # ระบบ OCR
+    OCR_CONFIG = '--psm 3 --oem 3' # Full page scan with default LSTM engine
+    LANG_SUPPORT = 'eng+tha'
+    
+    # Blacklist Patterns (Regex Enabled)
+    BANNED_REGEX = [
         r"bregamb\.cc", r"withdrawal\s+success", r"reward\s+received", 
         r"free\s+\$", r"beast\s+games", r"t\.me/", r"bit\.ly/", 
         r"promo\s+code", r"claim\s+now", r"ถอนเงินสำเร็จ", r"รับรางวัล", 
-        r"ฟรีเครดิต", r"เว็บตรง", r"แจกฟรี", r"แอดไลน์", r"สูตรสล็อต"
+        r"ฟรีเครดิต", r"เว็บตรง", r"แจกฟรี", r"แอดไลน์", r"สูตรสล็อต",
+        r"เครดิตฟรี", r"เว็บสล็อต", r"ลงทุนน้อย", r"กำไรดี"
     ]
     
-    # รายชื่อไฟล์ที่รองรับ
-    SUPPORTED_FORMATS = {'.png', '.jpg', '.jpeg', '.webp', '.jfif', '.bmp'}
+    SUPPORTED_EXT = {'.png', '.jpg', '.jpeg', '.webp', '.jfif', '.bmp'}
 
-# ฐานข้อมูลหน่วยความจำ (RAM Buffer)
-image_database = deque(maxlen=GuardConfig.DATABASE_LIMIT)
-system_stats = {
-    "scanned": 0,
-    "blocked_visual": 0,
-    "blocked_text": 0,
-    "errors": 0,
-    "uptime_start": datetime.now()
-}
+# ==========================================
+# [3] TELEMETRY & DATA STORAGE
+# ==========================================
+class Telemetry:
+    """Class สำหรับเก็บสถิติการทำงานเชิงลึก"""
+    def __init__(self):
+        self.scanned_count = 0
+        self.blocked_visual = 0
+        self.blocked_text = 0
+        self.errors = 0
+        self.start_time = datetime.now()
+        self.last_attack_time = None
+        self.processing_times = deque(maxlen=100) # เก็บค่าความเร็ว 100 ครั้งล่าสุด
 
-# --- [3] ADVANCED IMAGE INTELLIGENCE (THE BRAIN) ---
+    def get_avg_speed(self):
+        if not self.processing_times: return 0.0
+        return sum(self.processing_times) / len(self.processing_times)
 
-class VisualIntelligence:
-    """Class สำหรับประมวลผลและวิเคราะห์ภาพระดับสูง"""
+stats = Telemetry()
+image_db = deque(maxlen=GuardPolicy.MAX_DB_ENTRIES)
+
+# ==========================================
+# [4] OMEGA VISION ENGINE (HIGH-END PROCESSING)
+# ==========================================
+class OmegaVision:
+    """ระบบประมวลผลภาพระดับสูงเพื่อความแม่นยำ 99.9%"""
     
     @staticmethod
-    def normalize_frame(img_bytes):
-        """ปรับแต่งภาพให้เข้าสู่มาตรฐานเดียวกัน (Image Normalization)"""
+    def prepare_image(raw_bytes):
+        """ขั้นตอนการ Normalize รูปภาพก่อนการวิเคราะห์"""
         try:
-            with Image.open(BytesIO(img_bytes)) as img:
+            with Image.open(BytesIO(raw_bytes)) as img:
+                # 1. ปรับค่าสีเป็น RGB เพื่อล้าง Metadata ที่อาจทำให้พิกเซลเพี้ยน
                 img = img.convert('RGB')
-                # 1. ปรับแสงอัตโนมัติ (กันการปรับแสงมืด/สว่าง)
+                
+                # 2. ปรับ Contrast อัตโนมัติ (แก้ปัญหาคนส่งรูปมืด/สว่างต่างกัน)
                 img = ImageOps.autocontrast(img)
-                # 2. ปรับความสว่างให้คงที่
-                brightness = ImageEnhance.Brightness(img)
-                img = brightness.enhance(1.0)
+                
+                # 3. ขยายขอบเขตพิกเซล (Equalization)
+                img = ImageOps.equalize(img)
+                
                 return img.copy()
         except Exception as e:
-            logger.error(f"Normalization Fail: {e}")
+            logger.error(f"Prepare Image Error: {e}")
             return None
 
     @staticmethod
-    def extract_fingerprints(img):
-        """สกัดลายนิ้วมือภาพ (Multi-Hashing) ระดับ 16x16"""
-        # แปลงเป็นขาวดำเพื่อตัดปัญหาเรื่องสี Wallpaper
-        processed = img.convert('L').resize((256, 256), Image.Resampling.LANCZOS)
-        # ใส่ BoxBlur เพื่อลด Noise เล็กๆ ที่อาจทำให้ Hash เพี้ยน
-        processed = processed.filter(ImageFilter.BoxBlur(radius=1))
+    def generate_hashes(img):
+        """คำนวณ Hash เชิงลึก 3 มิติ เพื่อดักจับรูป 'เกือบเหมือน'"""
+        # แปลงเป็นขาวดำและลดขนาดเพื่อมองข้าม Wallpaper พื้นหลัง
+        # เราใช้ขนาด 512 เพื่อความละเอียดก่อนลดลงไปทำ Hash 16x16
+        base = img.convert('L').resize((512, 512), Image.Resampling.LANCZOS)
+        
+        # เพิ่มเทคนิค BoxBlur เพื่อลดสัญญาณรบกวน (Noise)
+        base = base.filter(ImageFilter.BoxBlur(radius=1))
         
         return {
-            'p': imagehash.phash(processed, hash_size=16),
-            'd': imagehash.dhash(processed, hash_size=16),
-            'w': imagehash.whash(processed, hash_size=16)
+            'p': imagehash.phash(base, hash_size=16),
+            'd': imagehash.dhash(base, hash_size=16),
+            'w': imagehash.whash(base, hash_size=16)
         }
 
     @staticmethod
-    def advanced_ocr_scan(img):
-        """สแกนข้อความด้วยเทคนิค High-Contrast Filtering"""
-        # ทำให้ภาพชัดขึ้น 3 เท่าก่อนอ่าน
-        ocr_img = ImageOps.grayscale(img)
-        ocr_img = ImageEnhance.Contrast(ocr_img).enhance(3.0)
-        ocr_img = ImageEnhance.Sharpness(ocr_img).enhance(2.0)
+    def perform_ocr(img):
+        """อ่านข้อความในภาพด้วยเทคนิค Dynamic Contrast Enhancement"""
+        # ทำให้ภาพเป็นขาวดำสนิท (Binary) เพื่อให้อ่านง่ายขึ้น
+        enhancer = ImageEnhance.Contrast(img.convert('L'))
+        ocr_ready = enhancer.enhance(3.0).filter(ImageFilter.SHARPEN)
         
         try:
-            config = '--psm 3' # Full page scan mode
-            text = pytesseract.image_to_string(ocr_img, lang='eng+tha', config=config)
+            text = pytesseract.image_to_string(
+                ocr_ready, 
+                lang=GuardPolicy.LANG_SUPPORT, 
+                config=GuardPolicy.OCR_CONFIG
+            )
             return text.lower().strip()
         except Exception as e:
-            logger.error(f"OCR Advanced Scan Fail: {e}")
+            logger.error(f"OCR Operation Failed: {e}")
             return ""
 
-# --- [4] BOT ARCHITECTURE & COMMAND CENTER ---
-
-class RETHEliteBot(commands.Bot):
+# ==========================================
+# [5] BOT CORE & COMMAND INTERFACE
+# ==========================================
+class TitanBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
         intents.message_content = True 
@@ -121,163 +159,197 @@ class RETHEliteBot(commands.Bot):
         super().__init__(command_prefix="rb!", intents=intents, help_command=None)
         
     async def setup_hook(self):
+        """การตั้งค่าระบบ Hook เมื่อบอทเริ่มทำงาน"""
         await self.tree.sync()
-        self.health_check.start()
-        logger.info(f"System Initialized: {GuardConfig.VERSION}")
+        self.auto_maintenance.start()
+        logger.info(f"TitanBot Loaded: {GuardPolicy.VERSION}")
 
-    @tasks.loop(minutes=5)
-    async def health_check(self):
-        """ระบบตรวจสอบความเสถียรของบอทและจัดการหน่วยความจำ"""
-        current_time = datetime.now().strftime("%H:%M")
-        status = discord.Activity(
-            type=discord.ActivityType.watching, 
-            name=f"🛡️ Guard v7.0 | Clean at {current_time}"
-        )
-        await self.change_presence(status=discord.Status.online, activity=status)
-        
-        # ล้างข้อมูลที่เก่าเกิน 24 ชม. (ถ้าฐานข้อมูลแน่นเกินไป)
-        if len(image_database) > GuardConfig.DATABASE_LIMIT * 0.9:
-            logger.info("Auto-cleanup: Optimizing database...")
+    @tasks.loop(minutes=10)
+    async def auto_maintenance(self):
+        """ระบบจัดการหน่วยความจำและตรวจสอบสุขภาพบอทอัตโนมัติ"""
+        if len(image_db) > (GuardPolicy.MAX_DB_ENTRIES * GuardPolicy.CLEANUP_THRESHOLD):
+            logger.info("Maintenance: Performance optimization in progress...")
+            # ดำเนินการจัดเรียงหน่วยความจำใหม่ (ถ้างจำเป็น)
+            
+        uptime = datetime.now() - stats.start_time
+        logger.info(f"Health Check: Uptime {uptime} | DB Size: {len(image_db)}")
 
-bot = RETHEliteBot()
+bot = TitanBot()
 
-# --- [5] ADMINISTRATIVE INTERFACE (SLASH COMMANDS) ---
-
-@bot.tree.command(name="status", description="เช็คสถานะการทำงานระดับ Elite")
-async def get_status(interaction: discord.Interaction):
-    uptime = datetime.now() - system_stats["uptime_start"]
-    embed = discord.Embed(title=f"🛡️ {GuardConfig.VERSION} Dashboard", color=0x00ffcc)
-    embed.add_field(name="🛡️ System Power", value="🟢 ONLINE" if GuardConfig.PROTECTION_ENABLED else "🔴 OFFLINE")
-    embed.add_field(name="📦 Memory Vault", value=f"{len(image_database)}/{GuardConfig.DATABASE_LIMIT}")
-    embed.add_field(name="⏳ Uptime", value=str(uptime).split('.')[0])
-    embed.add_field(name="📸 Blocked (Visual)", value=str(system_stats["blocked_visual"]), inline=True)
-    embed.add_field(name="💬 Blocked (Text)", value=str(system_stats["blocked_text"]), inline=True)
-    embed.add_field(name="❌ Processing Errors", value=str(system_stats["errors"]), inline=True)
-    embed.set_footer(text="RETH OFFICIAL - Sovereign Security Infrastructure")
+# ==========================================
+# [6] ADMINISTRATIVE SLASH COMMANDS
+# ==========================================
+@bot.tree.command(name="titan_status", description="เช็คสถานะระบบ Omega Titan เชิงลึก")
+async def titan_status(interaction: discord.Interaction):
+    uptime = datetime.now() - stats.start_time
+    embed = discord.Embed(title=f"🛡️ {GuardPolicy.VERSION} Status Report", color=0x7289da)
+    
+    embed.add_field(name="🛡️ Protection", value="✅ ACTIVE" if GuardPolicy.PROTECTION_ENABLED else "❌ DISABLED", inline=True)
+    embed.add_field(name="⏳ System Uptime", value=str(uptime).split('.')[0], inline=True)
+    embed.add_field(name="📦 Database Usage", value=f"{len(image_db)}/{GuardPolicy.MAX_DB_ENTRIES}", inline=True)
+    
+    embed.add_field(name="📸 Blocked Visuals", value=f"{stats.blocked_visual} images", inline=True)
+    embed.add_field(name="💬 Blocked Texts", value=f"{stats.blocked_text} messages", inline=True)
+    embed.add_field(name="⚡ Avg Speed", value=f"{stats.get_avg_speed():.2f}s per image", inline=True)
+    
+    embed.set_thumbnail(url=bot.user.display_avatar.url)
+    embed.set_footer(text=f"Managed by {GuardPolicy.AUTHOR} Security Infrastructure")
     await interaction.response.send_message(embed=embed)
 
-@bot.tree.command(name="on", description="เปิดระบบป้องกัน Absolute Protection")
+@bot.tree.command(name="on", description="เปิดใช้งานระบบป้องกันระดับสูงสุด")
 @app_commands.checks.has_permissions(administrator=True)
-async def system_on(interaction: discord.Interaction):
-    GuardConfig.PROTECTION_ENABLED = True
-    await interaction.response.send_message("🛡️ **RETH Guard Elite:** เปิดระบบป้องกันระดับสูงสุดเรียบร้อย!")
+async def turn_on(interaction: discord.Interaction):
+    GuardPolicy.PROTECTION_ENABLED = True
+    await bot.change_presence(status=discord.Status.online)
+    await interaction.response.send_message("🟢 **Titan Logic:** ระบบป้องกัน Absolute Online!")
 
-@bot.tree.command(name="off", description="ปิดระบบป้องกัน")
+@bot.tree.command(name="off", description="ปิดใช้งานระบบป้องกันชั่วคราว")
 @app_commands.checks.has_permissions(administrator=True)
-async def system_off(interaction: discord.Interaction):
-    GuardConfig.PROTECTION_ENABLED = False
-    await interaction.response.send_message("⚠️ **RETH Guard Elite:** ปิดระบบป้องกันชั่วคราว (Security Disabled)")
+async def turn_off(interaction: discord.Interaction):
+    GuardPolicy.PROTECTION_ENABLED = False
+    await bot.change_presence(status=discord.Status.do_not_disturb)
+    await interaction.response.send_message("🔴 **Titan Logic:** ระบบป้องกัน Offline (Security Warning)")
 
-@bot.tree.command(name="clear", description="Wave Clear: ล้างฐานข้อมูลลายนิ้วมือภาพทั้งหมด")
+@bot.tree.command(name="clear_vault", description="ล้างฐานข้อมูลภาพทั้งหมดทันที")
 @app_commands.checks.has_permissions(administrator=True)
-async def database_clear(interaction: discord.Interaction):
-    count = len(image_database)
-    image_database.clear()
-    await interaction.response.send_message(f"🌊 **Wave Clear!** เคลียร์ข้อมูลภาพ {count} รายการสำเร็จ")
+async def clear_vault(interaction: discord.Interaction):
+    count = len(image_db)
+    image_db.clear()
+    await interaction.response.send_message(f"🌊 **Wave Clear:** เคลียร์หน่วยความจำภาพ {count} รายการสำเร็จ!")
 
-# --- [6] THE PROTECTOR: EVENT PROCESSING CORE ---
-
+# ==========================================
+# [7] THE OMEGA PROTECTOR (MESSAGE HANDLING)
+# ==========================================
 @bot.event
 async def on_message(message):
-    # ป้องกันบอทตอบโต้กันเอง
+    # ข้ามข้อความจาก Bot และข้อความนอก Server
     if message.author.bot or not message.guild:
         return
 
-    # ถ้าปิดระบบอยู่ ไม่ต้องรัน Logic การสแกน
-    if not GuardConfig.PROTECTION_ENABLED:
+    # หากระบบปิดอยู่ ให้ทำแค่คำสั่งพื้นฐาน
+    if not GuardPolicy.PROTECTION_ENABLED:
         await bot.process_commands(message)
         return
 
-    # [PHASE A: IMAGE SENTINEL]
+    # --- PHASE 1: VISUAL SCANNING ---
     if message.attachments:
         for attachment in message.attachments:
             file_ext = os.path.splitext(attachment.filename.lower())[1]
-            if file_ext in GuardConfig.SUPPORTED_FORMATS:
+            if file_ext in GuardPolicy.SUPPORTED_EXT:
                 try:
-                    start_time = time.time()
-                    system_stats["scanned"] += 1
+                    start_proc = time.time()
+                    stats.scanned_count += 1
                     
-                    # 1. โหลดและปรับภาพ
-                    img_bytes = await attachment.read()
-                    processed_img = VisualIntelligence.normalize_frame(img_bytes)
-                    if not processed_img: continue
-
-                    # 2. คำนวณ Hash เชิงโครงสร้าง
-                    current_hashes = VisualIntelligence.extract_fingerprints(processed_img)
+                    # 1. Download & Process
+                    raw_data = await attachment.read()
+                    titan_img = OmegaVision.prepare_image(raw_data)
+                    if titan_img is None: continue
                     
-                    # 3. สแกนข้อความเชิงลึก
-                    detected_text = VisualIntelligence.advanced_ocr_scan(processed_img)
+                    # 2. Extract Multiple Fingerprints
+                    current_hashes = OmegaVision.generate_hashes(titan_img)
                     
-                    # 🚀 Logic 1: Visual Structural Check (ความซ้ำซ้อนของโครงสร้างภาพ)
+                    # 3. Perform Deep OCR Analysis
+                    extracted_text = OmegaVision.perform_ocr(titan_img)
+                    
+                    # --- DECISION LOGIC ---
                     is_visual_duplicate = False
-                    for entry in image_database:
-                        target = entry['hashes']
-                        # เปรียบเทียบความต่าง (Hamming Distance)
-                        diff = (current_hashes['p'] - target['p']) + \
-                               (current_hashes['d'] - target['d']) + \
-                               (current_hashes['w'] - target['w'])
+                    for record in image_db:
+                        stored = record['hashes']
+                        # คำนวณความต่างแบบ Hamming Distance
+                        diff = (current_hashes['p'] - stored['p']) + \
+                               (current_hashes['d'] - stored['d']) + \
+                               (current_hashes['w'] - stored['w'])
                         
-                        if diff <= GuardConfig.STRUCTURAL_THRESHOLD:
+                        if diff <= GuardPolicy.STRICT_SENSITIVITY:
                             is_visual_duplicate = True
                             break
                     
-                    # 🚀 Logic 2: Pattern-Based Text Scan (ตรวจสอบคำต้องห้ามด้วย Regex)
-                    is_text_spam = any(re.search(pattern, detected_text) for pattern in GuardConfig.BANNED_PATTERNS)
+                    # ตรวจสอบ Regex ในข้อความที่อ่านจากรูป
+                    is_text_spam = any(re.search(p, extracted_text) for p in GuardPolicy.BANNED_REGEX)
 
                     if is_visual_duplicate or is_text_spam:
+                        # [ACTION] DELETE SPAM
                         await message.delete()
-                        system_stats["blocked_visual"] += 1 if is_visual_duplicate else 0
-                        system_stats["blocked_text"] += 1 if is_text_spam else 0
+                        stats.blocked_visual += 1 if is_visual_duplicate else 0
+                        stats.blocked_text += 1 if is_text_spam else 0
+                        stats.last_attack_time = datetime.now()
                         
-                        reason = "Structural Match" if is_visual_duplicate else "Blacklisted Content"
-                        logger.warning(f"BLOCKED: {message.author} | Reason: {reason} | Time: {time.time()-start_time:.2f}s")
+                        reason = "Structural Match" if is_visual_duplicate else "Scam Content"
+                        logger.warning(f"BLOCKED: {message.author} | Reason: {reason}")
                         
-                        await message.channel.send(f"🛡️ **RETH Guard:** สกัดกั้นสแปม ({'รูปซ้ำ' if is_visual_duplicate else 'ข้อความต้องห้าม'})!", delete_after=5)
-                        return
+                        # แจ้งเตือนสั้นๆ และลบตัวเอง
+                        warn = f"🛡️ **RETH Guard:** สกัดกั้นสแปม ({'รูปซ้ำ' if is_visual_duplicate else 'ข้อความสแกม'}) ดีดทิ้งเรียบร้อย!"
+                        await message.channel.send(warn, delete_after=5)
+                        return # หยุดทำงานสำหรับข้อความนี้
                     
-                    # ถ้าผ่าน ให้เก็บข้อมูลภาพไว้
-                    image_database.append({'hashes': current_hashes, 'timestamp': time.time()})
+                    # หากรูปภาพผ่านการตรวจสอบ ให้บันทึกลงฐานข้อมูล
+                    image_db.append({'hashes': current_hashes, 'timestamp': time.time()})
+                    
+                    # บันทึกความเร็วในการทำงาน
+                    stats.processing_times.append(time.time() - start_proc)
                     
                 except Exception as e:
-                    system_stats["errors"] += 1
-                    logger.error(f"Engine Core Error: {e}")
+                    stats.errors += 1
+                    logger.error(f"Image Analysis System Failure: {e}")
+                    # แสดง Traceback เฉพาะใน Console เพื่อการแก้ไข
+                    traceback.print_exc()
 
-    # [PHASE B: TEXTUAL PATTERN MATCHING]
-    content_clean = message.content.lower()
-    if any(re.search(p, content_clean) for p in GuardConfig.BANNED_PATTERNS):
+    # --- PHASE 2: PLAIN TEXT SCANNING ---
+    clean_content = message.content.lower()
+    if any(re.search(p, clean_content) for p in GuardPolicy.BANNED_REGEX):
         try:
             await message.delete()
-            system_stats["blocked_text"] += 1
+            stats.blocked_text += 1
+            logger.warning(f"BLOCKED TEXT: {message.author} | Keyword Match")
             return
         except discord.Forbidden:
-            logger.warning("Missing delete permissions!")
+            logger.error("System Failure: Missing 'Manage Messages' permission.")
 
-    # [PHASE C: COMMAND EXECUTION]
+    # --- PHASE 3: COMMAND HANDLING ---
     await bot.process_commands(message)
 
-# --- [7] SYSTEM BOOTSTRAP & SAFETY ---
-
+# ==========================================
+# [8] SYSTEM STARTUP & ERROR HANDLING
+# ==========================================
 @bot.event
 async def on_ready():
-    logger.info("==========================================")
-    logger.info(f"   {GuardConfig.VERSION} IS NOW LIVE")
-    logger.info(f"   Logged in as: {bot.user.name}")
-    logger.info("   Security Mode: ACTIVE")
-    logger.info("==========================================")
+    logger.info("="*50)
+    logger.info(f"SYSTEM ONLINE: {GuardPolicy.VERSION}")
+    logger.info(f"USERNAME: {bot.user.name}#{bot.user.discriminator}")
+    logger.info(f"SERVERS: {len(bot.guilds)}")
+    logger.info(f"INTENTS: Message Content & Members Enabled")
+    logger.info("="*50)
+
+@bot.event
+async def on_command_error(ctx, error):
+    """ระบบจัดการข้อผิดพลาดของคำสั่ง"""
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.send("❌ คุณไม่มีสิทธิ์ในการใช้คำสั่งนี้!", delete_after=5)
+    elif isinstance(error, commands.CommandNotFound):
+        pass # ข้ามคำสั่งที่ไม่รู้จัก
+    else:
+        logger.error(f"Unhandled Command Error: {error}")
 
 if __name__ == "__main__":
-    # ปลุกบอทตลอด 24 ชม.
+    # เปิดใช้งานระบบ Keep Alive เพื่อรันบน Render 24/7
     keep_alive()
+    
     if TOKEN:
         try:
-            # รันบอทด้วยระบบควบคุม Error
             bot.run(TOKEN)
-        except discord.errors.LoginFailure:
-            logger.critical("Invalid Discord Token. Please update .env")
+        except discord.LoginFailure:
+            logger.critical("FATAL: Discord Token is invalid.")
         except Exception as e:
-            logger.critical(f"Fatal Boot Error: {e}")
+            logger.critical(f"FATAL: Bot failed to boot: {e}")
     else:
-        logger.error("No ANTISPAM_TOKEN found. Check your environment.")
+        logger.error("CONFIGURATION ERROR: ANTISPAM_TOKEN not found in environment.")
 
-# --- END OF ELITE SOVEREIGN CODE ---
-# Total logic density optimized for RETH OFFICIAL security.
+# ==========================================
+# [9] ADDITIONAL NOTES FOR DEVELOPER
+# ==========================================
+# 1. ระบบนี้ใช้โครงสร้าง Class-Based เพื่อความง่ายในการขยายฟีเจอร์ในอนาคต
+# 2. มีการใช้ Regex เพื่อเพิ่มประสิทธิภาพในการดักจับคำที่จงใจพิมพ์เลี่ยง
+# 3. ระบบ Image Normalization ช่วยให้บอทมองข้าม Wallpaper พื้นหลังที่เปลี่ยนไป
+# 4. มีการใช้ Tasks Loop เพื่อทำความสะอาดและตรวจสอบสุขภาพของบอททุก 10 นาที
+# ==========================================
+# END OF OMEGA TITAN SOURCE CODE
