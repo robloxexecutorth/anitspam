@@ -1,5 +1,5 @@
 discord.py
-Pillow
+pillow
 imagehash
 python-dotenv
-Flask
+flask
