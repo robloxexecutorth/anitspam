@@ -1,73 +1,71 @@
 import discord
-from discord import app_commands, ui
 from discord.ext import commands
 import os
-import aiohttp
-import asyncio
 from PIL import Image
 import imagehash
 from io import BytesIO
 from collections import deque
 from dotenv import load_dotenv
-from keep_alive import keep_alive
 
 load_dotenv()
-TOKEN = os.getenv('DISCORD_TOKEN')
-WEB_LINK = "https://yourwebsite.com"
+TOKEN = os.getenv('ANTISPAM_TOKEN') # ใช้ Token แยกจากบอทเดิม
 
-# เก็บค่า Hash ของรูปภาพที่เคยลบไปแล้ว (จำได้สูงสุด 100 รูป)
-spam_image_hashes = deque(maxlen=100)
-setup_channels = set()
+# ตั้งค่าความจำ: จำรหัสรูปภาพล่าสุด 200 รูป
+spam_image_hashes = deque(maxlen=200)
 
-# --- ฟังก์ชันสแกนรูปภาพ ---
-async def is_spam_image(attachment):
+# รายชื่อคำต้องห้าม (เพิ่มได้ตามใจชอบ)
+BANNED_KEYWORDS = ["bregamb.cc", "promo code", "reward received", "free $", "beast games"]
+
+intents = discord.Intents.default()
+intents.message_content = True
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+async def check_image_spam(attachment):
+    """ฟังก์ชันสแกนและคำนวณ Hash ของรูปภาพ"""
     if not attachment.content_type or not attachment.content_type.startswith('image'):
         return False
-    
     try:
-        # อ่านรูปภาพจาก Discord เข้ามาใน Memory
-        img_data = await attachment.read()
-        img = Image.open(BytesIO(img_data))
-        
-        # สร้างรหัส Hash (ลายนิ้วมือรูปภาพ)
+        data = await attachment.read()
+        img = Image.open(BytesIO(data))
+        # คำนวณรหัสลายนิ้วมือของรูป (คล้ายกันจะ Hash ได้เลขเดิม)
         current_hash = str(imagehash.average_hash(img))
         
-        # ตรวจสอบว่าเคยมีรูปนี้ส่งมาหรือยัง
         if current_hash in spam_image_hashes:
-            return True
+            return True # เจอรูปซ้ำ!
         
-        # ถ้ายังไม่เคยมี ให้เก็บรหัสไว้ในหน่วยความจำ
         spam_image_hashes.append(current_hash)
         return False
-    except Exception as e:
-        print(f"Image scan error: {e}")
+    except:
         return False
 
-# ... (ScriptPaginator และ search_logic เดิมของคุณ) ...
+@bot.event
+async def on_ready():
+    print(f'🛡️ Anti-Spam Bot is Online: {bot.user}')
 
 @bot.event
 async def on_message(message):
-    if message.author == bot.user: return
+    if message.author == bot.user:
+        return
 
-    # 1. ระบบตรวจจับรูปภาพสแปม
+    # --- 1. ตรวจสอบรูปภาพ ---
     if message.attachments:
         for attachment in message.attachments:
-            if await is_spam_image(attachment):
+            if await check_image_spam(attachment):
                 try:
                     await message.delete()
-                    await message.channel.send(f"🚫 **RETH Shield:** Spam image detected and removed!", delete_after=5)
-                    print(f"Blocked spam image from {message.author}")
-                    return # หยุดการทำงานทันที
-                except:
-                    pass
+                    await message.channel.send(f"⚠️ {message.author.mention}, พบรูปภาพสแปมซ้ำ! (Spam Detected)", delete_after=5)
+                    return
+                except: pass
 
-    # 2. ระบบ Search เดิมของคุณ
-    if message.channel.id in setup_channels:
-        if not message.attachments: # ถ้าไม่ใช่รูปภาพ ค่อยทำการค้นหา
-            try: await message.delete()
-            except: pass
-            await search_logic(message.content, message.channel)
+    # --- 2. ตรวจสอบคำต้องห้าม ---
+    content_lower = message.content.lower()
+    if any(word in content_lower for word in BANNED_KEYWORDS):
+        try:
+            await message.delete()
+            await message.channel.send(f"🚫 {message.author.mention}, ห้ามส่งข้อความสแปมหรือลิงก์อันตราย!", delete_after=5)
+            return
+        except: pass
 
     await bot.process_commands(message)
 
-# ... (ส่วนที่เหลือของโค้ด setup, unset, getscript เหมือนเดิม) ...
+bot.run(TOKEN)
