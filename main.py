@@ -5,6 +5,7 @@ import os
 import imagehash
 import pytesseract
 import asyncio
+import numpy as np
 from PIL import Image, ImageOps, ImageFilter
 from io import BytesIO
 from collections import deque
@@ -15,14 +16,12 @@ from keep_alive import keep_alive
 load_dotenv()
 TOKEN = os.getenv('ANTISPAM_TOKEN')
 
-# Global States
 PROTECTION_ENABLED = True
 image_vault = deque(maxlen=2000)
 
-# คำต้องห้าม (ทั้งในแชทและในรูปภาพ)
 BANNED_WORDS = [
     "bregamb.cc", "withdrawal success", "reward received", "free $", 
-    "beast games", "t.me/", "bit.ly/", "promo code", "gift card"
+    "beast games", "t.me/", "bit.ly/", "promo code", "gift card", "claim now"
 ]
 
 intents = discord.Intents.default()
@@ -34,128 +33,117 @@ class RETHBot(commands.Bot):
         super().__init__(command_prefix="rb!", intents=intents, help_command=None)
         
     async def setup_hook(self):
-        # Sync Slash Commands ไปยัง Discord ทันทีที่รัน
         await self.tree.sync()
-        print("✅ [ULTRA SYNC] Commands & Systems Synced!")
+        print("✅ [AI-SENTINEL SYNC] Systems & AI Logic Ready!")
 
 bot = RETHBot()
 
-# --- 2. THE VISION ENGINE (HASH + OCR) ---
+# --- 2. THE AI & VISION ENGINE ---
 
-def scan_visual_content(img_bin):
+def ai_visual_analysis(img_bin):
     """
-    วิเคราะห์รูปภาพเชิงลึก: ทำความสะอาดรูปภาพ -> ทำ Hash -> อ่านข้อความ
+    วิเคราะห์รูปภาพด้วย 3 ระบบ: Multi-Hash + OCR + AI Structural Check
     """
     with Image.open(BytesIO(img_bin)) as img:
         img = img.convert('RGB')
         
-        # ส่วนที่ 1: เตรียมสำหรับการทำ Hash (ลด Noise เพื่อดักจับรูปที่ต่างกันนิดเดียว)
-        # ปรับขนาดและเบลอเล็กน้อยเพื่อให้มองข้ามจุดเล็กๆ เช่น เวลาบนจอ
+        # [AI Step 1] ทำความสะอาดรูปภาพเพื่อดักจับรูป 'เกือบเหมือน'
+        # ย่อขนาดลงเล็กน้อยและทำ Gray-scale เพื่อหาโครงสร้างหลัก (Structural Analysis)
+        ai_struct_img = img.resize((128, 128)).convert('L')
+        struct_hash = imagehash.whash(ai_struct_img)
+
+        # [AI Step 2] Multi-Hashing (ลายนิ้วมือภาพ 3 มิติ)
         hash_prep = img.resize((256, 256), Image.Resampling.LANCZOS)
-        hash_prep = hash_prep.filter(ImageFilter.GaussianBlur(radius=1))
+        hash_prep = hash_prep.filter(ImageFilter.BoxBlur(radius=1)) # AI แนะนำให้ใช้ BoxBlur เพื่อคงขอบภาพ
         
         hashes = {
             'p': imagehash.phash(hash_prep),
             'd': imagehash.dhash(hash_prep),
-            'w': imagehash.whash(hash_prep)
+            'w': struct_hash
         }
         
-        # ส่วนที่ 2: เตรียมสำหรับการอ่าน OCR (ทำให้ชัดเพื่อให้บอทอ่านตัวหนังสือได้)
-        ocr_prep = ImageOps.grayscale(img)
-        ocr_prep = ImageOps.autocontrast(ocr_prep)
-        # อ่านข้อความในภาพ
+        # [AI Step 3] OCR Deep Scan (อ่านข้อความ)
+        ocr_prep = ImageOps.autocontrast(ImageOps.grayscale(img))
         try:
-            extracted_text = pytesseract.image_to_string(ocr_prep).lower()
+            extracted_text = pytesseract.image_to_string(ocr_prep, lang='eng+tha').lower()
         except:
             extracted_text = ""
             
         return hashes, extracted_text
 
-def is_duplicate(new_hashes, threshold=5):
+def is_duplicate_ai(new_hashes, sensitivity=5):
     """
-    เปรียบเทียบความต่างของภาพสะสม (Threshold 5 = โหดสุด)
+    ระบบ AI เปรียบเทียบความต่าง: ยิ่งรูปคล้าย ยิ่งดีดไว
     """
     for entry in image_vault:
         saved = entry['hashes']
+        # คำนวณความต่างเชิงโครงสร้าง
         diff = (new_hashes['p'] - saved['p']) + \
                (new_hashes['d'] - saved['d']) + \
                (new_hashes['w'] - saved['w'])
-        if diff <= threshold:
+        
+        if diff <= sensitivity:
             return True
     return False
 
-# --- 3. SLASH COMMANDS CONTROL ---
+# --- 3. COMMAND CENTER ---
 
-@bot.tree.command(name="on", description="เปิดระบบป้องกันระดับสูงสุด (Zero-Tolerance)")
+@bot.tree.command(name="on", description="เปิดระบบป้องกัน AI Omni-Vision")
 @app_commands.checks.has_permissions(administrator=True)
 async def system_on(interaction: discord.Interaction):
     global PROTECTION_ENABLED
     PROTECTION_ENABLED = True
-    await bot.change_presence(status=discord.Status.online)
-    await interaction.response.send_message("🟢 **RETH Guard:** ระบบ Omni-Vision ออนไลน์แล้ว!", ephemeral=False)
+    await bot.change_presence(status=discord.Status.online, activity=discord.Game(name="AI Protection Active"))
+    await interaction.response.send_message("🛡️ **RETH Guard AI:** ระบบวิเคราะห์ภาพขั้นสูงเปิดใช้งานแล้ว!", ephemeral=False)
 
-@bot.tree.command(name="off", description="ปิดระบบป้องกันชั่วคราว")
+@bot.tree.command(name="off", description="ปิดระบบป้องกัน")
 @app_commands.checks.has_permissions(administrator=True)
 async def system_off(interaction: discord.Interaction):
     global PROTECTION_ENABLED
     PROTECTION_ENABLED = False
     await bot.change_presence(status=discord.Status.do_not_disturb)
-    await interaction.response.send_message("🔴 **RETH Guard:** ระบบป้องกันถูกปิดใช้งาน", ephemeral=False)
+    await interaction.response.send_message("⚠️ **RETH Guard AI:** ระบบป้องกันหยุดทำงานชั่วคราว", ephemeral=False)
 
-@bot.tree.command(name="clear", description="Wave Clear: ล้างหน่วยความจำภาพทั้งหมด")
+@bot.tree.command(name="clear", description="Wave Clear: ล้างฐานข้อมูล AI")
 @app_commands.checks.has_permissions(administrator=True)
 async def clear_wave(interaction: discord.Interaction):
     count = len(image_vault)
     image_vault.clear()
-    await interaction.response.send_message(f"🌊 **Wave Clear!** ล้างลายนิ้วมือภาพสำเร็จ {count} รายการ", ephemeral=False)
+    await interaction.response.send_message(f"🌊 **Wave Clear!** ล้างลายนิ้วมือภาพ {count} รายการสำเร็จ", ephemeral=False)
 
-# --- 4. CORE EVENTS ---
-
-@bot.event
-async def on_ready():
-    print(f"🚀 [SYSTEM LIVE] RETH Guard Alpha v5.0")
-    print(f"Precision: Zero-Tolerance (Threshold 5)")
-    print(f"Vision: OCR + Multi-Hashing Enabled")
-    print(f"------------------------------------")
+# --- 4. CORE ENGINE ---
 
 @bot.event
 async def on_message(message):
     if message.author.bot or not message.guild or not PROTECTION_ENABLED:
         return
 
-    # 🛡️ ระบบสแกนรูปภาพ (Image Analysis)
+    # [📸 AI IMAGE ANALYSIS]
     if message.attachments:
         for attachment in message.attachments:
             if any(attachment.filename.lower().endswith(ext) for ext in ['.png', '.jpg', '.jpeg', '.webp', '.jfif']):
                 try:
                     img_bytes = await attachment.read()
-                    hashes, text_in_img = scan_visual_content(img_bytes)
+                    hashes, text_in_img = ai_visual_analysis(img_bytes)
 
-                    # ตรวจสอบ 1: รูปภาพเหมือนกันไหม? (Visual Duplicate)
-                    visual_match = is_duplicate(hashes)
-                    
-                    # ตรวจสอบ 2: มีคำสแกมในรูปไหม? (OCR Detection)
-                    text_match = any(word in text_in_img for word in BANNED_WORDS)
+                    # วิเคราะห์ 2 ชั้น: ลายภาพ (Hash) + เนื้อหา (OCR)
+                    is_visual_spam = is_duplicate_ai(hashes, sensitivity=6) # ปรับให้ดุขึ้นเป็น 6
+                    is_text_spam = any(word in text_in_img for word in BANNED_WORDS)
 
-                    if visual_match or text_match:
+                    if is_visual_spam or is_text_spam:
                         await message.delete()
-                        log_info = "Visual Duplicate" if visual_match else f"Banned Text in Image: {text_in_img[:20]}..."
-                        print(f"🔥 [DELETED] {log_info} from {message.author}")
-                        await message.channel.send(f"🛡️ **RETH Guard:** ตรวจพบสแปม ({'รูปซ้ำ' if visual_match else 'ข้อความต้องห้ามในรูป'}) ดีดทิ้งเรียบร้อย!", delete_after=3)
+                        log_type = "AI Duplicate Match" if is_visual_spam else "AI Content Detection"
+                        print(f"🔥 [AI DELETED] {log_type} from {message.author}")
+                        await message.channel.send(f"🛡️ **RETH Guard AI:** พบสแปมผ่านการวิเคราะห์ {log_type} ดีดออกทันที!", delete_after=3)
                         return
                     
-                    # บันทึกเป็นรูปใหม่
                     image_vault.append({'hashes': hashes})
                 except Exception as e:
-                    print(f"❌ [SCAN ERROR]: {e}")
+                    print(f"❌ [AI ERROR]: {e}")
 
-    # 🛡️ ระบบสแกนข้อความในแชท (Keyword Filtering)
-    msg_clean = message.content.lower()
-    if any(word in msg_clean for word in BANNED_WORDS):
-        try:
-            await message.delete()
-            print(f"🚫 [DELETED] Keyword spam from {message.author}")
-            return
+    # [⌨️ KEYWORD SCAN]
+    if any(word in message.content.lower() for word in BANNED_WORDS):
+        try: await message.delete(); print(f"🚫 [DELETED] Text spam: {message.author}")
         except: pass
 
     await bot.process_commands(message)
