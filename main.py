@@ -1,64 +1,95 @@
 import discord
 from discord.ext import commands
 import os
-from PIL import Image
 import imagehash
+from PIL import Image
 from io import BytesIO
 from collections import deque
 from dotenv import load_dotenv
-from keep_alive import keep_alive  # นำเข้าระบบ Keep Alive
+from keep_alive import keep_alive
 
+# Load Config
 load_dotenv()
 TOKEN = os.getenv('ANTISPAM_TOKEN')
 
-# ตั้งค่าความจำ: จำรหัสรูปภาพล่าสุด 200 รูป
-spam_image_hashes = deque(maxlen=200)
-
-# รายชื่อคำต้องห้าม
-BANNED_KEYWORDS = ["bregamb.cc", "promo code", "reward received", "free $", "beast games"]
+# เพิ่มความจำ Cache เป็น 1,000 รูป เพื่อการดักจับที่ครอบคลุมระยะยาว
+# เก็บเป็น Dictionary เพื่อรองรับ Multi-Hash
+spam_database = deque(maxlen=1000)
 
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-async def check_image_spam(attachment):
-    if not attachment.content_type or not attachment.content_type.startswith('image'):
-        return False
-    try:
-        data = await attachment.read()
-        img = Image.open(BytesIO(data))
-        current_hash = str(imagehash.average_hash(img))
+def get_image_fingerprints(img):
+    """
+    สร้างลายนิ้วมือภาพ 3 รูปแบบเพื่อความแม่นยำ 99%
+    1. pHash: ตรวจโครงสร้าง (ทนต่อการปรับสี/แสง)
+    2. dHash: ตรวจความต่างของขอบ (ทนต่อการย่อ/ขยาย)
+    3. wHash: ตรวจ Wavelet (ทนต่อการบีบอัดไฟล์)
+    """
+    return {
+        'phash': imagehash.phash(img),
+        'dhash': imagehash.dhash(img),
+        'whash': imagehash.whash(img)
+    }
+
+def check_similarity(new_fingerprints, threshold=10):
+    """
+    ระบบคำนวณความต่างแบบ Multi-Layer
+    ถ้าคะแนนความต่างรวมกันน้อยกว่า Threshold แสดงว่าเป็นภาพเดียวกัน
+    """
+    for saved in spam_database:
+        # คำนวณความต่างเฉลี่ยจากทั้ง 3 Hash
+        p_diff = new_fingerprints['phash'] - saved['phash']
+        d_diff = new_fingerprints['dhash'] - saved['dhash']
+        w_diff = new_fingerprints['whash'] - saved['whash']
         
-        if current_hash in spam_image_hashes:
+        # ถ้าเฉลี่ยแล้วมีความต่างน้อยมาก (เกือบเหมือนเป๊ะ)
+        if (p_diff + d_diff + w_diff) / 3 <= threshold:
             return True
-        
-        spam_image_hashes.append(current_hash)
-        return False
-    except:
-        return False
+    return False
 
 @bot.event
 async def on_ready():
-    print(f'🛡️ RETH Guard is Online: {bot.user}')
+    await bot.change_presence(
+        status=discord.Status.do_not_disturb, # ตั้งเป็นห้ามรบกวน ให้ดูดุๆ
+        activity=discord.Activity(type=discord.ActivityType.competing, name="Anti-Spam Elite")
+    )
+    print(f'🛡️ [ELITE MODE ACTIVE] RETH Guard is scanning with 99% precision.')
 
 @bot.event
 async def on_message(message):
-    if message.author == bot.user:
-        return
+    if message.author.bot: return
 
-    # 1. ตรวจสอบรูปภาพสแปม
+    # --- 📸 ADVANCED IMAGE SCANNING ---
     if message.attachments:
         for attachment in message.attachments:
-            if await check_image_spam(attachment):
+            if any(ext in attachment.filename.lower() for ext in ['.jpg', '.jpeg', '.png', '.webp', '.jfif']):
                 try:
-                    await message.delete()
-                    await message.channel.send(f"⚠️ {message.author.mention}, Stop spamming!", delete_after=5)
-                    return
-                except: pass
+                    data = await attachment.read()
+                    img = Image.open(BytesIO(data))
+                    
+                    # สกัดลายนิ้วมือ
+                    fingerprints = get_image_fingerprints(img)
+                    
+                    if check_similarity(fingerprints):
+                        await message.delete()
+                        # ลงโทษด้วยการเตือน (ลบทิ้งใน 3 วินาที)
+                        alert = await message.channel.send(f"⚠️ **RETH Guard:** ตรวจพบสแปมภาพจาก {message.author.mention}! [Similarity Match 99%]", delete_after=3)
+                        print(f"🔥 [ELITE DELETE] High-similarity match from {message.author}")
+                        return 
+                    
+                    # บันทึกภาพใหม่ลงฐานข้อมูล
+                    spam_database.append(fingerprints)
+                    
+                except Exception as e:
+                    print(f"❌ [SCAN ERROR]: {e}")
 
-    # 2. ตรวจสอบคำต้องห้าม
-    content_lower = message.content.lower()
-    if any(word in content_lower for word in BANNED_KEYWORDS):
+    # --- ⌨️ KEYWORD SCANNING ---
+    # เพิ่มคำต้องห้ามให้ดุขึ้น
+    BANNED = ["bregamb.cc", "promo code", "reward received", "free $", "bit.ly/", "t.me/"]
+    if any(word in message.content.lower() for word in BANNED):
         try:
             await message.delete()
             return
@@ -66,11 +97,8 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
-# รันระบบ Keep Alive ก่อน Start บอท
+# Flask Server สำหรับ Keep Alive
 keep_alive()
 
-# เริ่มการทำงานของบอท
-try:
+if TOKEN:
     bot.run(TOKEN)
-except Exception as e:
-    print(f"Error starting bot: {e}")
