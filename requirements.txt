@@ -2,3 +2,4 @@ discord.py
 Pillow
 imagehash
 python-dotenv
+Flask
