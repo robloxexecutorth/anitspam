@@ -1,6 +1,8 @@
 discord.py
 Pillow
 imagehash
+pytesseract
+numpy
 PyWavelets
 python-dotenv
 flask
